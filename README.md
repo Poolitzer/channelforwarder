@@ -1,0 +1,3 @@
+This is a small bot for auto forwarding messages from your channel to your discussion group in case you want to have this feature but don't like comments.
+
+You need to add it to a channel as admin, then to the group you want to link, make it an admin there as well with pin and delete permission. Change the IDs in the beginning of the code to the ones of the chat, plug in your bot token; and you are good to go.
