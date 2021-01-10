@@ -1,9 +1,12 @@
 from typing import TypedDict, List, Literal, cast
 
-from telegram import Update, InputMediaVideo, InputMediaPhoto, InputMediaDocument
+from telegram import Update, InputMediaVideo, InputMediaPhoto, InputMediaDocument, InputMediaAudio
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, Defaults, PicklePersistence
-GROUP_ID = -1000
-CHANNEL_ID = -1000
+from telegram.utils.helpers import effective_message_type
+GROUP_ID = -100
+CHANNEL_ID = -100
+MEDIA_GROUP_TYPES = {"audio": InputMediaAudio, "document": InputMediaDocument, "photo": InputMediaPhoto,
+                     "video": InputMediaVideo}
 
 
 class MsgDict(TypedDict):
@@ -18,10 +21,7 @@ def media_group_sender(context: CallbackContext):
     context.job.context = cast(List[MsgDict], context.job.context)
     media = []
     for msg_dict in context.job.context:
-        if msg_dict["media_type"] == "video":
-            media.append(InputMediaVideo(media=msg_dict["media_id"], caption=msg_dict["caption"]))
-        else:
-            media.append(InputMediaPhoto(media=msg_dict["media_id"], caption=msg_dict["caption"]))
+        media.append(MEDIA_GROUP_TYPES[msg_dict["media_type"]](media=msg_dict["media_id"], caption=msg_dict["caption"]))
     if not media:
         return
     msgs = bot.send_media_group(chat_id=GROUP_ID, media=media)
@@ -32,46 +32,20 @@ def media_group_sender(context: CallbackContext):
 
 def new_post(update: Update, context: CallbackContext):
     message = update.effective_message
-    bot = context.bot
-    if message.text:
-        msg = bot.send_message(chat_id=GROUP_ID, text=message.text_html)
-    elif message.effective_attachment:
-        if message.media_group_id:
-            media_type = "video" if message.video else "photo"
-            media_id = message.video.file_id if message.video else message.photo[-1].file_id
-            msg_dict = {"media_type": media_type, "media_id": media_id, "caption": message.caption_html,
-                        "post_id": message.message_id}
-            jobs = context.job_queue.get_jobs_by_name(str(message.media_group_id))
-            if jobs:
-                jobs[0].context.append(msg_dict)
-            else:
-                context.job_queue.run_once(callback=media_group_sender, when=2, context=[msg_dict],
-                                           name=str(message.media_group_id))
-            return
-        if message.voice:
-            msg = bot.send_voice(chat_id=GROUP_ID, document=message.voice.file_id, caption=message.caption_html)
-        elif message.contact:
-            msg = bot.send_contact(chat_id=GROUP_ID, contact=message.contact)
-        elif message.venue:
-            payload = message.venue.to_dict()
-            payload.update({"longitude": message.venue.location.longitude,
-                            "latitude": message.venue.location.latitude})
-            del payload["location"]
-            msg = bot.send_venue(chat_id=GROUP_ID, **payload)
-        elif message.location:
-            msg = bot.send_location(chat_id=GROUP_ID, **message.location.to_dict())
-        elif message.photo:
-            msg = bot.send_photo(chat_id=GROUP_ID, photo=message.photo[-1].file_id, caption=message.caption_html)
-        elif message.video:
-            msg = bot.send_video(chat_id=GROUP_ID, video=message.video.file_id, caption=message.caption_html)
-        elif message.video_note:
-            msg = bot.send_video_note(chat_id=GROUP_ID, video_note=message.video_note.file_id)
+    if message.media_group_id:
+        media_type = effective_message_type(message)
+        media_id = message.photo[-1].file_id if message.photo else message.effective_attachment.file_id
+        msg_dict = {"media_type": media_type, "media_id": media_id, "caption": message.caption_html,
+                    "post_id": message.message_id}
+        jobs = context.job_queue.get_jobs_by_name(str(message.media_group_id))
+        if jobs:
+            jobs[0].context.append(msg_dict)
         else:
-            msg = bot.send_document(chat_id=GROUP_ID, document=message.effective_attachment.file_id,
-                                    caption=message.caption_html)
-    else:
+            context.job_queue.run_once(callback=media_group_sender, when=2, context=[msg_dict],
+                                       name=str(message.media_group_id))
         return
-    msg.pin()
+    msg = message.copy(chat_id=GROUP_ID)
+    context.bot.pin_chat_message(chat_id=GROUP_ID, message_id=msg.message_id)
     context.bot_data["messages"][message.message_id] = msg.message_id
 
 
@@ -94,8 +68,6 @@ def edited_post(update: Update, context: CallbackContext):
         if not media:
             media = InputMediaDocument(media=message.effective_attachment.file_id, caption=message.caption_html)
         bot.edit_message_media(chat_id=GROUP_ID, message_id=msg_id, media=media)
-    else:
-        return
 
 
 def del_msg(update: Update, context: CallbackContext):
